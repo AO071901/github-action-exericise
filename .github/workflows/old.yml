@@ -1,5 +1,12 @@
 name: Old
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      greeting:
+        type: string
+        default: Hello
+        required: true
+        description: A cheerful word
 jobs:
   hello:
     runs-on: ubuntu-latest
