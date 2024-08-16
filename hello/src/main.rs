@@ -31,8 +31,17 @@ async fn main() {
     let db = Arc::new(Mutex::new(Vec::new()));
 
     let app = Router::new()
-        .route("/tasks", get(list_tasks).post(create_task))
-        .route("/tasks/:id", get(get_task).patch(update_task).delete(delete_task))
+        .route("/tasks", 
+            get(|state: State<Db>| async move { list_tasks(state).await })
+            .post(|state: State<Db>, payload: Json<CreateTask>| async move {
+                create_task(state, payload).await
+            })
+        )
+        .route("/tasks/:id", 
+            get(|state: State<Db>, path: Path<Uuid>| async move { get_task(state, path).await })
+            .patch(|state: State<Db>, path: Path<Uuid>, payload: Json<Task>| async move { update_task(state, path, payload).await })
+            .delete(|state: State<Db>, path: Path<Uuid>| async move { delete_task(state, path).await })
+        )
         .with_state(db);
 
     axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
@@ -50,7 +59,6 @@ async fn create_task(
     State(db): State<Db>,
     Json(payload): Json<CreateTask>,
 ) -> (StatusCode, Json<Task>) {
-    let mut db = db.lock().unwrap();
     let task = Task {
         id: Uuid::new_v4(),
         title: payload.title,
@@ -59,8 +67,17 @@ async fn create_task(
         estimated_time: None,
     };
     
-    let task_with_ai = analyze_task_with_claude(task).await;
-    db.push(task_with_ai.clone());
+    let task_with_ai = match analyze_task_with_claude(task.clone()).await {
+        Ok(analyzed_task) => analyzed_task,
+        Err(_) => task.clone(),
+    };
+
+    // MutexGuardの生存期間を短くするため、スコープを制限します
+    {
+        let mut db_guard = db.lock().unwrap();
+        db_guard.push(task_with_ai.clone());
+    }
+
     (StatusCode::CREATED, Json(task_with_ai))
 }
 
@@ -104,7 +121,7 @@ async fn delete_task(
     }
 }
 
-async fn analyze_task_with_claude(task: Task) -> Task {
+async fn analyze_task_with_claude(task: Task) -> Result<Task, StatusCode> {
     let claude_api_key = std::env::var("CLAUDE_API_KEY").expect("CLAUDE_API_KEY must be set");
     let client = reqwest::Client::new();
     let prompt = format!(
@@ -123,10 +140,10 @@ async fn analyze_task_with_claude(task: Task) -> Task {
         }))
         .send()
         .await
-        .unwrap()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .json::<serde_json::Value>()
         .await
-        .unwrap();
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let ai_response = response["completion"].as_str().unwrap_or("");
     let mut task = task;
@@ -142,5 +159,5 @@ async fn analyze_task_with_claude(task: Task) -> Task {
         task.estimated_time = Some(format!("{} hours", time));
     }
 
-    task
+    Ok(task)
 }
