@@ -15,10 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ${{ github.workspace }}/hello
+        working-directory: hello
     steps:
-      - name: Start
-        run: echo "github.workspace=${{ github.workspace }}"
       - name: Checkout
         uses: actions/checkout@v4
       - name: Cache cargo registry
